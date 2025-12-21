@@ -117,7 +117,7 @@ def meta_train(
                     models: Dict[AnyStr, List[nn.Module]],
                     dataset: Dict[AnyStr, Any], 
                     loss
-            ) -> Dict:
+                ) -> Dict:
 
     """
         Handles the repetition of experiment runs
@@ -140,12 +140,15 @@ def meta_train(
         training_config = config.experiments.training_config
         training_config.device = config.device 
 
-        if mn == 'FourierForecast':
-            bands = config.baselines[mn].freq_bands
-            sample_rate = config.baselines[mn].sample_rate 
-            loss = EnergyLoss(bands, sample_rate)
-        else:
-            loss = nn.MSELoss()
+        loss = nn.MSELoss()
+
+        if 'edge_index' in dataset:
+            edge_index = dataset['edge_index']
+            edge_attr = dataset['edge_attr']
+
+            if mn == 'HiGFlowGraph':
+                model.edge_index = edge_index.to(device)
+                model.edge_attr = edge_attr.to(device)
 
         train_stat, norm_stat = train(train_data, val_data, training_config, full_path, model, loss)
         torch.save(model, os.path.join(full_path, 'model'))

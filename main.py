@@ -1,23 +1,6 @@
 import os 
 import sys 
 
-sys.path.append(os.path.abspath('higher_order_attn'))
-sys.path.append(os.path.abspath(os.path.join('higher_order_attn', 'grand_src')))
-sys.path.append(os.path.join(os.getcwd(), 'StemGNN'))
-sys.path.append(os.path.join(os.getcwd(), 'StemGNN', 'utils'))
-sys.path.append(os.path.join(os.getcwd(), 'iTransformer'))
-sys.path.append(os.path.join(os.getcwd(), 'iTransformer', 'layers'))
-sys.path.append(os.path.join(os.getcwd(), 'iTransformer', 'utils'))
-
-sys.path.append(os.path.join(os.getcwd(), 'FourierGNN'))
-#sys.path.append(os.path.join(os.getcwd(), 'FourierGNN', 'model'))
-#sys.path.append(os.path.join(os.getcwd(), 'HGCN'))
-#sys.path.append(os.path.join(os.getcwd(), 'FEDformer'))
-#sys.path.append(os.path.join(os.getcwd(), 'FEDformer', 'models'))
-#sys.path.append(os.path.join(os.getcwd(), 'FEDformer', 'layers'))
-
-
-
 import argparse
 import json
 import torch
@@ -27,30 +10,10 @@ import torch.nn as nn
 
 from mutils import get_ds_config, load_from_checkpoint 
 from train import meta_train 
-from networks import FourierForecast
+from networks import HiGFlow
+from networks_graph_known import HiGFlowGraph
 from dataset_utils import open_data 
 
-from StemGNN.models.base_model import Model 
-from FourierGNN.model.FourierGNN import FGN 
-#from HGCN.model import * 
-
-from baselines.AGCRN import AGCRN
-from baselines.DLinear import Model as DLinear 
-from baselines.NLinear import Model as NLinear 
-from baselines.FreTS import Model as FreTS 
-#from baselines.GWNET import gwnet
-from baselines.LSTNet import Model as LSTNet 
-
-from iTransformer.model.iTransformer import Model as iTransformer 
-from iTransformer.model.Flashformer import Model as Flashformer  
-#from iTransformer.model.Flowformer import Model as Flowformer  
-#from iTransformer.model.Reformer import Model as Reformer  
-
-#from FEDformer.models.Autoformer import Model as Autoformer 
-#from FEDformer.models.Informer import Model as Informer  
-#from FEDformer.models.FEDformer import Model as FEDformer  
-
-#Autoformer = Informer = FEDformer = None 
 
 def create_models(config: ml.ConfigDict, ds_config: ml.ConfigDict):
     model_names = config.baselines.model_names 
@@ -58,88 +21,16 @@ def create_models(config: ml.ConfigDict, ds_config: ml.ConfigDict):
     buffer_size = config.experiments.training_config.window_size 
     models = {} 
     for mn in model_names:
-        if mn not in ['LSTM', 'GRU']: # quick fix 
-            mc = config.baselines[mn]
-            mc.horizon = horizon
-            mc.buffer_size = buffer_size 
-            mc.num_nodes = ds_config.var_dim
-        if mn == 'FourierForecast':
-            models[mn] = lambda: FourierForecast(config, ds_config)
-        elif mn == 'StemGNN':
-            models[mn] = lambda: Model(ds_config.var_dim, 2, buffer_size, 2, horizon=horizon)
-        elif mn == 'FourierGNN':
-            models[mn] = lambda: FGN(pre_length=horizon, embed_size=mc.embed_size, feature_size=mc.feature_size, seq_length=buffer_size, hidden_size=mc.hidden_size)
-        elif mn == 'AGCRN':
-            models[mn] = lambda: AGCRN(mc)
-        elif mn == 'FreTS':
-            models[mn] = lambda: FreTS(mc)
-        elif mn == 'DLinear':
-            models[mn] = lambda: DLinear(mc)
-        elif mn == 'NLinear':
-            models[mn] = lambda: NLinear(mc)
-        elif mn == 'LSTNet':
-            models[mn] = lambda: LSTNet(mc, horizon)
-        #elif mn == 'GWNET':
-        #    models[mn] = lambda: gwnet(config.device, ds_config.var_dim, in_dim=buffer_size, out_dim=horizon)
-        elif mn in ['HGCN', 'LSTM', 'GRU', 'GWNET']:
-            mc = config.baselines.HGCN
-            if mn == 'HGCN':
-                cls = H_GCN_wh
-            elif mn == 'LSTM':
-                cls = LSTM
-            elif mn == 'GRU':
-                cls = GRU
-            elif mn == 'GWNET':
-                cls = gwnet
-            else:
-                raise ValueError() 
-            models[mn] = lambda: cls(
-                                        config.device, 
-                                        ds_config.var_dim, 
-                                        mc.dropout,
-                                        in_dim=ds_config.var_dim,
-                                        length=buffer_size,
-                                        out_dim=horizon,
-                                        dilation_channels=ds_config.var_dim
-                                    )
-        elif mn == 'iTransformer':
-            mc.pred_len = ds_config.horizon
-            models[mn] = lambda: iTransformer(mc)
-        elif mn == 'Flashformer':
-            mc.pred_len = ds_config.horizon
-            mc.enc_in = mc.dec_in = mc.c_out = ds_config.var_dim 
-            models[mn] = lambda: Flashformer(mc)
-        elif mn == 'Flowformer':
-            mc.pred_len = ds_config.horizon
-            mc.enc_in = mc.dec_in = mc.c_out = ds_config.var_dim 
-            models[mn] = lambda: Flowformer(mc)
-        elif mn == 'Reformer':
-            mc.pred_len = ds_config.horizon
-            mc.enc_in = mc.dec_in = mc.c_out = ds_config.var_dim 
-            models[mn] = lambda: Reformer(mc)
-        elif mn == 'FEDformer':
-            mc.pred_len = ds_config.horizon
-            mc.enc_in = mc.dec_in = mc.c_out = ds_config.var_dim 
-            models[mn] = lambda: FEDformer(mc)
-        elif mn == 'Autoformer':
-            mc.pred_len = ds_config.horizon
-            mc.enc_in = mc.dec_in = mc.c_out = ds_config.var_dim 
-            models[mn] = lambda: Autoformer(mc)
-        elif mn == 'Informer':
-            mc.pred_len = ds_config.horizon
-            mc.enc_in = mc.dec_in = mc.c_out = ds_config.var_dim 
-            models[mn] = lambda: Informer(mc)
+        if mn == 'HiGFlow':
+            models[mn] = lambda: HiGFlow(config, ds_config)
+
+        elif mn == 'HiGFlowGraph':
+            models[mn] = lambda: HiGFlowGraph(config, ds_config)
+
         else:
             raise ValueError('Invalid model name')
 
     return models 
-
-
-def list_format(string):
-    try:
-        return json.loads(string)  
-    except json.JSONDecodeError:
-        raise argparse.ArgumentTypeError('Input must be a JSON list')
 
 
 def run_experiment(pargs):
@@ -170,9 +61,9 @@ def run_experiment(pargs):
     else:
         raise ValueError('Invalid configuration name')
     
-    config.baselines.FourierForecast.lifter_domain_embed = lde 
-    config.baselines.FourierForecast.lifter_image_embed = lie 
-    config.baselines.FourierForecast.embed_domain_embed = ede 
+    config.baselines.HiGFlow.lifter_domain_embed = lde 
+    config.baselines.HiGFlow.lifter_image_embed = lie 
+    config.baselines.HiGFlow.embed_domain_embed = ede 
 
     if nrepeats is not None:
         config.experiments.num_repeats = nrepeats
@@ -181,24 +72,30 @@ def run_experiment(pargs):
         config.experiments.training_config.epoch = epochs 
 
     if cluster_fac is not None:
-        config.baselines.FourierForecast.n_cluster_facs = [1, cluster_fac]
+        config.baselines.HiGFlow.n_cluster_facs = [1, cluster_fac]
+
+    if pargs.res:
+        config.baselines.HiGFlow.res = pargs.res  
+    if pargs.hybrid:
+        config.baselines.HiGFlow.hybrid = pargs.hybrid 
+    if pargs.no_ret:
+        config.baselines.HiGFlow.hybrid = pargs.no_ret 
 
     if nlayer is not None:
-        config.baselines.FourierForecast.n_layers = nlayer 
+        config.baselines.HiGFlow.n_layers = nlayer 
         if nlayer == 1:
-            config.baselines.FourierForecast.n_cluster_facs = [1]
+            config.baselines.HiGFlow.n_cluster_facs = [1]
         elif nlayer == 2:
-            config.baselines.FourierForecast.n_cluster_facs = [1, 0.75]
+            config.baselines.HiGFlow.n_cluster_facs = [1, 0.75]
         elif nlayer == 3:
-            config.baselines.FourierForecast.n_cluster_facs = [1, 0.75, 0.5]
+            config.baselines.HiGFlow.n_cluster_facs = [1, 0.5, 0.25]
         elif nlayer == 4:
-            config.baselines.FourierForecast.n_cluster_facs = [1, 0.75, 0.5, 0.375]
+            config.baselines.HiGFlow.n_cluster_facs = [1, 0.75, 0.5, 0.375]
         elif nlayer == 5:
-            config.baselines.FourierForecast.n_cluster_facs = [1, 0.75, 0.5, 0.375, 0.25]
+            config.baselines.HiGFlow.n_cluster_facs = [1, 0.75, 0.5, 0.375, 0.25]
 
-    config.baselines.FourierForecast.use_attn = use_attn 
-    config.baselines.FourierForecast.map_layer_num = map_layer_num 
-
+    config.baselines.HiGFlow.use_attn = use_attn 
+    config.baselines.HiGFlow.map_layer_num = map_layer_num 
 
     ds_config = get_ds_config(config, ds_name)
 
@@ -207,6 +104,12 @@ def run_experiment(pargs):
     if horizon is not None:
         config.experiments.training_config.horizon = horizon 
         ds_config.horizon = horizon 
+
+    if pargs.window_size is not None:
+        config.experiments.training_config.window_size = pargs.window_size
+
+    ds_config.horizon = config.experiments.training_config.horizon
+    ds_config.buffer_size = config.experiments.training_config.window_size
     
     if model is not None:
         config.baselines.model_names = [model]
@@ -240,24 +143,72 @@ def run_experiment(pargs):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset', type=str, help='The name of the dataset to run')
-    parser.add_argument('--use_attn', type=bool, help='The type of configuration file', default=True)
-    parser.add_argument('--map_layer_num', type=int, help='The type of configuration file', default=3)
-    parser.add_argument('--config', type=str, help='The type of configuration file', default='graph')
-    parser.add_argument('--gpu', type=int, default=None, help='Override model GPU in config file')
-    parser.add_argument('--nrepeats', type=int, default=None, help='Override model GPU in config file')
-    parser.add_argument('--checkpoint', type=str, help='Checkpoint directory for loading models', default='checkpoints')
-    parser.add_argument('--train', action='store_true', help='Option to train the model')
-    parser.add_argument('--lde', action='store_false', default=True, help='lifter domain embed')
-    parser.add_argument('--lie', action='store_false', default=True, help='lifter image embed')
-    parser.add_argument('--ede', action='store_false', default=True, help='embed domain embed')
-    parser.add_argument('--test', action='store_true', help='Option to test the model')
-    parser.add_argument('--model', type=str, default=None, help='Override model in config file')
-    parser.add_argument('--nlayer', type=int, default=None, help='Override model in config file')
-    parser.add_argument('--lr', type=float, default=None, help='Override model in config file')
-    parser.add_argument('--horizon', type=int, default=None, help='Override model in config file') 
-    parser.add_argument('--epoch', type=int, default=None, help='Override model in config file')
-    parser.add_argument('--cluster_fac', type=float, default=None, help='Override model in config file')
+
+    parser.add_argument('--dataset', type=str,
+                        help='Dataset name (e.g., Traffic, Electricity, PEMS03).')
+
+    parser.add_argument('--use_attn', type=bool, default=True,
+                        help='Enable attention modules (True/False).')
+
+    parser.add_argument('--map_layer_num', type=int, default=3,
+                        help='Number of mapping layers to use.')
+
+    parser.add_argument('--config', type=str, default='graph',
+                        help='Configuration preset or config file key to load (e.g., graph).')
+
+    parser.add_argument('--gpu', type=int, default=None,
+                        help='GPU index to use. Overrides the GPU setting in the config.')
+
+    parser.add_argument('--nrepeats', type=int, default=None,
+                        help='Number of repeated runs (e.g., for different seeds). Overrides config.')
+
+    parser.add_argument('--checkpoint', type=str, default='checkpoints',
+                        help='Checkpoint directory for saving/loading model states.')
+
+    parser.add_argument('--train', action='store_true',
+                        help='Train the model.')
+
+    parser.add_argument('--lde', action='store_false', default=True,
+                        help='Disable lifter domain embedding (enabled by default).')
+
+    parser.add_argument('--lie', action='store_false', default=True,
+                        help='Disable lifter image embedding (enabled by default).')
+
+    parser.add_argument('--ede', action='store_false', default=True,
+                        help='Disable embedding domain embedding (enabled by default).')
+
+    parser.add_argument('--test', action='store_true',
+                        help='Evaluate the model on the test split.')
+
+    parser.add_argument('--model', type=str, default=None,
+                        help='Model name to run. Overrides the model setting in the config.')
+
+    parser.add_argument('--nlayer', type=int, default=None,
+                        help='Number of model layers. Overrides the config setting.')
+
+    parser.add_argument('--window_size', type=int, default=None,
+                        help='Input sequence length (T_in). Overrides the config setting.')
+
+    parser.add_argument('--lr', type=float, default=None,
+                        help='Learning rate. Overrides the config setting.')
+
+    parser.add_argument('--horizon', type=int, default=None,
+                        help='Forecast horizon (T_out). Overrides the config setting.')
+
+    parser.add_argument('--epoch', type=int, default=None,
+                        help='Number of training epochs. Overrides the config setting.')
+
+    parser.add_argument('--cluster_fac', type=float, default=None,
+                        help='Clustering factor for hierarchical/coarsening modules. Overrides config.')
+
+    parser.add_argument('--hybrid', action='store_true', default=False,
+                        help='Enable hybrid architecture variant.')
+
+    parser.add_argument('--res', action='store_true', default=False,
+                        help='Enable residual-connection variant.')
+
+    parser.add_argument('--no_ret', action='store_true', default=False,
+                        help='Disable retention/memory mechanism (no-retention variant).')
 
 
     pargs = parser.parse_args()

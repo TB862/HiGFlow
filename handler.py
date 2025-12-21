@@ -1,8 +1,6 @@
 import json
 from datetime import datetime
 
-from StemGNN.data_loader.forecast_dataloader import ForecastDataset, de_normalized
-
 import torch
 import torch.nn as nn
 import torch.utils.data as torch_data
@@ -11,6 +9,94 @@ import time
 import os
 
 from math_utils import evaluate
+
+import torch.utils.data as torch_data
+import numpy as np
+import torch
+import pandas as pd
+
+
+def calc_mae_roll(target, forecast, roll=None):
+    # B, T, N
+    diff = torch.abs(target - forecast)
+    diff = diff.transpose(0, 1) # T, B, N
+    diff = diff.mean(dim=(1, 2)).squeeze() # T
+
+    if roll is None:
+        total = diff 
+    else:
+        total = (diff + roll) / 2
+
+    return total 
+
+
+def normalized(data, normalize_method, norm_statistic=None):
+    if normalize_method == 'min_max':
+        if not norm_statistic:
+            norm_statistic = dict(max=np.max(data, axis=0), min=np.min(data, axis=0))
+        scale = norm_statistic['max'] - norm_statistic['min'] + 1e-5
+        data = (data - norm_statistic['min']) / scale
+        data = np.clip(data, 0.0, 1.0)
+    elif normalize_method == 'z_score':
+        if not norm_statistic:
+            norm_statistic = dict(mean=np.mean(data, axis=0), std=np.std(data, axis=0))
+        mean = norm_statistic['mean']
+        std = norm_statistic['std']
+        std = [1 if i == 0 else i for i in std]
+        data = (data - mean) / std
+        norm_statistic['std'] = std
+    return data, norm_statistic
+
+
+def de_normalized(data, normalize_method, norm_statistic):
+    if normalize_method == 'min_max':
+        if not norm_statistic:
+            norm_statistic = dict(max=np.max(data, axis=0), min=np.min(data, axis=0))
+        scale = norm_statistic['max'] - norm_statistic['min'] + 1e-8
+        data = data * scale + norm_statistic['min']
+    elif normalize_method == 'z_score':
+        if not norm_statistic:
+            norm_statistic = dict(mean=np.mean(data, axis=0), std=np.std(data, axis=0))
+        mean = norm_statistic['mean']
+        std = norm_statistic['std']
+        std = [1 if i == 0 else i for i in std]
+        data = data * std + mean
+    return data
+
+
+class ForecastDataset(torch_data.Dataset):
+    def __init__(self, df, window_size, horizon, normalize_method=None, norm_statistic=None, interval=1):
+        self.window_size = window_size
+        self.interval = interval
+        self.horizon = horizon
+        self.normalize_method = normalize_method
+        self.norm_statistic = norm_statistic
+        df = pd.DataFrame(df)
+        df = df.fillna(method='ffill', limit=len(df)).fillna(method='bfill', limit=len(df)).values
+        self.data = df
+        self.df_length = len(df)
+        self.x_end_idx = self.get_x_end_idx()
+        if normalize_method:
+            self.data, _ = normalized(self.data, normalize_method, norm_statistic)
+
+    def __getitem__(self, index):
+        hi = self.x_end_idx[index]
+        lo = hi - self.window_size
+        train_data = self.data[lo: hi]
+        target_data = self.data[hi:hi + self.horizon]
+        x = torch.from_numpy(train_data).type(torch.float)
+        y = torch.from_numpy(target_data).type(torch.float)
+        return x, y
+
+    def __len__(self):
+        return len(self.x_end_idx)
+
+    def get_x_end_idx(self):
+        # each element `hi` in `x_index_set` is an upper bound for get training data
+        # training data range: [lo, hi), lo = hi - window_size
+        x_index_set = range(self.window_size, self.df_length - self.horizon + 1)
+        x_end_idx = [x_index_set[j * self.interval] for j in range((len(x_index_set)) // self.interval)]
+        return x_end_idx
 
 
 def masked_MAPE(v, v_, axis=None):
@@ -66,8 +152,6 @@ def MAE(v, v_, axis=None):
     :return: int, MAE averages on all elements of input.
     '''
     return np.mean(np.abs(v_ - v), axis).astype(np.float64)
-
-import torch
 
 def compute_dirichlet_energy(predictions, edge_index, edge_weight):
     """
@@ -129,36 +213,11 @@ def evaluate(y, y_hat, by_step=False, by_node=False, edge_index=None, edge_weigh
 
     return *s, dirchlet_engrey
 
-
-def save_model(model, model_dir, epoch=None):
-    if model_dir is None:
-        return
-    if not os.path.exists(model_dir):
-        os.makedirs(model_dir)
-    epoch = str(epoch) if epoch else ''
-    file_name = os.path.join(model_dir, epoch + '_stemgnn.pt')
-    with open(file_name, 'wb') as f:
-        torch.save(model, f)
-
-
-def load_model(model_dir, epoch=None):
-    if not model_dir:
-        return
-    epoch = str(epoch) if epoch else ''
-    file_name = os.path.join(model_dir, epoch + '_stemgnn.pt')
-    if not os.path.exists(model_dir):
-        os.makedirs(model_dir)
-    if not os.path.exists(file_name):
-        return
-    with open(file_name, 'rb') as f:
-        model = torch.load(f)
-    return model
-
-
 def inference(model, dataloader, device, node_cnt, window_size, horizon):
     forecast_set = []
     target_set = []
     model.eval()
+
     #node_cnt -= 4 
     with torch.no_grad():
         for i, (inputs, target) in enumerate(dataloader):
@@ -168,23 +227,27 @@ def inference(model, dataloader, device, node_cnt, window_size, horizon):
             inputs = inputs.float()
             target = target.float()
             #x_enc, x_enc_mark, y_enc, y_enc_mark = inputs[:,:,:-4], inputs[:,:,-4:], target[:,:,:-4], target[:,:,-4:]
+            
+            tbuffer = inputs.shape[1]
+            horizon = target.shape[1]
 
             step = 0
             forecast_steps = np.zeros([inputs.size()[0], horizon, node_cnt], dtype=np.float64)
             while step < horizon:
-                #dec_inp = torch.zeros_like(y_enc[:, -3:, :]).float()
-                #dec_inp = torch.cat([y_enc[:, :12, :], dec_inp], dim=1).float().to(device)
-                #forecast_result = model(x_enc, x_enc_mark, dec_inp, y_enc_mark)
-                forecast_result = model(inputs)
+                #dec_inp = torch.zeros_like(y_enc[:, -horizon:, :]).float()
+                #dec_inp = torch.cat([y_enc[:, :tbuffer, :], dec_inp], dim=1).float().to(device)
+                #forecast_result = model(x_enc, x_enc_mark, dec_inp, y_enc_mark)#.transpose(2, 1)
+                forecast_result = model(inputs)#.transpose(2, 1)
                 len_model_output = forecast_result.size()[1]
                 if len_model_output == 0:  
                     raise Exception('Get blank inference result')
 
-                #target = target[:,-3:,:-4]
+                #target = target[:,:,:-4]
+
 
                 target = target[:,:,:forecast_result.shape[-1]]
                 inputs = inputs[:,:,:forecast_result.shape[-1]]
-
+                
                 inputs[:, :window_size - len_model_output, :] = inputs[:, len_model_output:window_size,:].clone()
                 inputs[:, window_size - len_model_output:, :] = forecast_result.clone()
                 forecast_steps[:, step:min(horizon - step, len_model_output) + step, :] = \
@@ -203,6 +266,7 @@ def validate(model, dataloader, device, normalize_method, statistic,
     start = datetime.now()
     forecast_norm, target_norm = inference(model, dataloader, device,
                                            node_cnt, window_size, horizon)   
+
     if normalize_method and statistic and False:
         forecast = de_normalized(forecast_norm, normalize_method, statistic) 
         target = de_normalized(target_norm, normalize_method, statistic)
@@ -214,6 +278,7 @@ def validate(model, dataloader, device, normalize_method, statistic,
     else:
         score = evaluate(target, forecast)
     
+    #forecast = forecast.transpose(2, 1)
     score_by_node = evaluate(target, forecast, by_node=True)
     end = datetime.now()
 
@@ -297,27 +362,22 @@ def train(train_data, valid_data, args, result_file, model=None, loss=nn.MSELoss
         model.train()
         loss_total = 0
         cnt = 0
+
         for i, (inputs, target) in enumerate(train_loader):
             inputs = inputs.to(args.device)
             target = target.to(args.device)
+
+            tbuffer = inputs.shape[1]
+            horizon = target.shape[1]
             
             inputs = inputs.float()
             target = target.float()
-            #x_enc, x_enc_mark, y_enc, y_enc_mark = inputs[:,:,:-4], inputs[:,:,-4:], target[:,:,:-4], target[:,:,-4:]
-
-            #dec_inp = torch.zeros_like(y_enc[:, -3:, :]).float()
-            #dec_inp = torch.cat([y_enc[:, :12, :], dec_inp], dim=1).float().to(args.device)
 
             model.zero_grad()        
 
-            #forecast = model(x_enc, x_enc_mark, dec_inp, y_enc_mark)
             forecast = model(inputs)
-            #target = target[:,-3:,:-4]
 
-            if hasattr(model, 'all_hidden_outputs'):                                
-                loss = forecast_loss(forecast, target, model.all_hidden_outputs)    
-            else:
-                loss = forecast_loss(forecast, target)
+            loss = forecast_loss(forecast, target)
 
             cnt += 1
             loss.backward()
@@ -325,7 +385,7 @@ def train(train_data, valid_data, args, result_file, model=None, loss=nn.MSELoss
             loss_total += float(loss)
         print('| end of epoch {:3d} | time: {:5.2f}s | train_total_loss {:5.4f} | best mae {:5.4f}'.format(epoch, (
                 time.time() - epoch_start_time), loss_total / cnt, best_validate_mae))
-        save_model(model, result_file, epoch)
+
         if (epoch+1) % args.exponential_decay_step == 0:
             my_lr_scheduler.step()
         if (epoch + 1) % args.validate_freq == 0:
@@ -342,12 +402,11 @@ def train(train_data, valid_data, args, result_file, model=None, loss=nn.MSELoss
                 validate_score_non_decrease_count = 0
             else:
                 validate_score_non_decrease_count += 1
-            # save model
-            if is_best_for_now:
-                save_model(model, result_file)
+
         # early stop
         if args.early_stop and validate_score_non_decrease_count >= args.early_stop_step:
             break
+            
     return performance_metrics, normalize_statistic
 
 

@@ -26,14 +26,6 @@ class SpatialMap(nn.Module):
 
         self.spt_module = create_mapper((dbl+1)*spt_in, spt_out, map_layer_num, hidden_dim=hidden_dim) 
 
-        """self.spt_module = nn.Sequential(
-                                        nn.Linear((dbl+1)*spt_in, hidden_dim),
-                                        nn.LeakyReLU(),
-                                        nn.Linear(hidden_dim, hidden_dim),
-                                        nn.LeakyReLU(),
-                                        nn.Dropout(p=0.1),
-                                        nn.Linear(hidden_dim, spt_out)
-        )"""
 
     def forward(self, x, y=None):
         if y is not None:
@@ -116,7 +108,6 @@ class GraphProjector(nn.Module):
 
         self.weight_key = nn.Parameter(scale*torch.randn(size=(embed_size, 1)))
         self.weight_query = nn.Parameter(scale*torch.randn(size=(embed_size, 1)))
-        #nn.init.xavier_uniform_(self.weight_query.data, gain=1.414)
 
         self.drop_edges = model_config.drop_edges 
 
@@ -126,7 +117,7 @@ class GraphProjector(nn.Module):
         key = torch.matmul(input, self.weight_key)
         query = torch.matmul(input, self.weight_query)
 
-        attention = key.transpose(1, 2) * query
+        attention = key.transpose(2, 1) #* query
         attention = torch.mean(attention, dim=0)
         attention = F.softmax(attention, dim=0)
         
@@ -141,7 +132,7 @@ class GraphProjector(nn.Module):
         with torch.no_grad():
             # instead of masking by attention score, use the mask for the top K nodes, where 
             # K is 0.8 * num_nodes
-            min_attn_score = torch.quantile(edge_weights.flatten(), self.attn_thrs)
+            min_attn_score = 0.9 # torch.quantile(edge_weights.flatten(), self.attn_thrs)
             mask = (edge_weights > min_attn_score)
     
             nconn = torch.sum(mask, dim=0)
@@ -176,14 +167,6 @@ class DimensionChanger(nn.Module):
         
         self.time_node_embed = create_mapper(2*tdim, tdim, map_layer_num, hidden_dim=hidden_dim) 
 
-        """self.time_node_embed = nn.Sequential(
-                                                nn.Linear(2*tdim, hidden_dim),
-                                                nn.LeakyReLU(),
-                                                nn.Linear(hidden_dim, hidden_dim),
-                                                nn.LeakyReLU(),
-                                                nn.Dropout(p=0.1),
-                                                nn.Linear(hidden_dim, tdim)
-        )"""
 
 class Reducer(DimensionChanger):
     def __init__(self, ncls1: int, ncls2: int, tbuffer: int, map_layer_num: int, domain_embed: bool):
@@ -202,7 +185,7 @@ class Reducer(DimensionChanger):
         self.embed_domain = domain_embed
 
     def forward(self, x, edge_index, edge_weight):
-        batch, tbuffer, _, hidden_dim = x.shape
+        batch, tbuffer, hidden_dim = x.shape[0], x.shape[1], x.shape[-1]
         
         if self.embed_domain:
             node_embed = embed_nodes(self.ncls2, self.node_embed, self.time_node_embed, hidden_dim, batch, tbuffer, x.device)
@@ -268,15 +251,19 @@ class Lifter(DimensionChanger):
 
 
 class FourierComponet(nn.Module):
-    def __init__(self, ndim: int, out_ch: int): 
+    def __init__(self, ndim: int, out_ch: int, tbuffer=12, horizon=3, edge_dim=None): 
         super(FourierComponet, self).__init__()
 
-        self.fourier_time_module = TemporalMap(12, 12, 3)
+        self.fourier_time_module = TemporalMap(tbuffer, tbuffer, horizon)
 
         hidden_size = 64
         self.gcn = GCN(ndim*hidden_size, ndim*hidden_size, 1, hidden_size) 
 
         self.out_ch = out_ch 
+
+        self.edge_dim = edge_dim
+        if self.edge_dim is not None:
+            self.edge_proj = nn.Linear(self.edge_dim, 1)
 
     def forward(self, x, edge_index, edge_weight):      
         batch, tbuffer, var_dim, hidden_dim = x.shape 
@@ -284,17 +271,24 @@ class FourierComponet(nn.Module):
 
         x = self.fourier_time_module(x)
         x = x.flatten(0, 2) 
+
+        if self.edge_dim:
+            edge_weight = self.edge_proj(edge_weight).squeeze()
+
         x = self.gcn(x, edge_index, edge_weight)
         x = x.unflatten(0, (batch, tbuffer, -1))
 
         return x
 
-
-class FourierForecast(nn.Module):
+from time import time 
+class HiGFlow(nn.Module):
     def __init__(self, config: ml.ConfigDict, ds_config: ml.ConfigDict):
-        super(FourierForecast, self).__init__()
+        super(HiGFlow, self).__init__()
 
-        model_config = config.baselines.FourierForecast
+        model_config = config.baselines.HiGFlow
+
+        self.hybrid = model_config.hybrid 
+        self.res = model_config.res 
 
         self.n_layers = model_config.n_layers 
         map_layer_num = model_config.map_layer_num
@@ -341,7 +335,10 @@ class FourierForecast(nn.Module):
             out_ch = self.tbuffer_size if n == 0 else self.embed_size 
 
             dim = 1 if len(self.n_clusters) == 1 else (1 if n == len(self.n_clusters) - 1 else 2)
-            components.append(FourierComponet(dim, out_ch)) 
+            if self.res:
+                dim = 1
+
+            components.append(FourierComponet(dim, out_ch, tbuffer=self.tbuffer_size, horizon=self.horizon)) 
 
         self.graph_reducers = nn.ModuleList(reducers) 
         self.fourier_components = nn.ModuleList(components) 
@@ -375,7 +372,6 @@ class FourierForecast(nn.Module):
 
         features, graphs, edge_weights = [x], [], []        
         all_cluster_lists = []      
-
         for n, projector in enumerate(self.graph_projectors):
             if n > 0:
                 reducer, ei, ew = self.graph_reducers[n - 1], graphs[n - 1], edge_weights[n - 1]
@@ -385,8 +381,9 @@ class FourierForecast(nn.Module):
                 higher_x = abst_x
             else:
                 higher_x = features[0]
+
             abst_graph, eweights = projector(higher_x)
-   
+
             graphs.append(abst_graph)
             edge_weights.append(eweights)
 
@@ -399,10 +396,17 @@ class FourierForecast(nn.Module):
             else:
                 lifter, x_cls = self.lifters[m - 1], all_cluster_lists[self.n_layers - m - 1]
                 intermed_state = lifter(features[self.n_layers - m], hidden_state, x_cls)
-                message = torch.concat((abst_x, intermed_state), dim=3)
+
+                if self.res or self.not_ret:
+                    message = intermed_state
+                else:
+                    message = torch.concat((abst_x, intermed_state), dim=3)
 
             hidden_state = fcmpnt(message, abst_graph, ew)
 
+            if (self.hybrid or self.res) and not self.no_ret:
+                hidden_state += abst_x
+            
             context_handler = torch.no_grad() if m < len(edge_weights) - 1 else nullcontext()
             with context_handler:
                 temp_pred = torch.matmul(hidden_state, self.embed_mat).squeeze()    

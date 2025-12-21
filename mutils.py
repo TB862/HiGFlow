@@ -60,7 +60,11 @@ def stack_graphs(edge_index, edge_weights, var_dim, time_dim):
     
     num_nodes_offset = num_nodes_offset.repeat_interleave(edge_index.shape[-1]).repeat(2, 1)
     edge_index = edge_index.repeat(1, time_dim) + num_nodes_offset
-    edge_weights = edge_weights.repeat(time_dim)
+
+    if len(edge_weights.shape) == 2:
+        edge_weights = edge_weights.repeat(time_dim, 1)
+    else:
+        edge_weights = edge_weights.repeat(time_dim)
 
     return edge_index, edge_weights 
 
@@ -146,6 +150,14 @@ def get_ds_config(config: ml.ConfigDict, ds_name: str) -> ml.ConfigDict:
         ds_config = config.ettm1
     elif ds_name == 'ETTm2':
         ds_config = config.ettm2
+    elif ds_name == 'PEMS03':
+        ds_config = config.pems03
+    elif ds_name == 'PEMS04':
+        ds_config = config.pems04
+    elif ds_name == 'PEMS07':
+        ds_config = config.pems07
+    elif ds_name == 'PEMS08':
+        ds_config = config.pems08
     elif ds_name == 'ECL':
         ds_config = config.ecl
     else:

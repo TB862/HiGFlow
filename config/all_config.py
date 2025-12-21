@@ -23,6 +23,11 @@ def graph_config():
     config.ettm2 = ettm2_config()
     config.ecl = ecl_config()
 
+    config.pems03 = pems03_config()
+    config.pems04 = pems04_config()
+    config.pems07 = pems07_config()
+    config.pems08 = pems08_config()
+
     config.experiments = ml.ConfigDict()                                                                                
     config.experiments.num_repeats = 1
     config.experiments.training_config = training_config() 
@@ -30,9 +35,10 @@ def graph_config():
 
     config.baselines = ml.ConfigDict()
     
-    config.baselines.model_names = ['FourierForecast']                 # baseline params might need to be model specific later
+    config.baselines.model_names = ['HiGFlow']                 # baseline params might need to be model specific later
 
-    config.baselines.FourierForecast = fourier_forecast_config()
+    config.baselines.HiGFlow = higflow_config()
+    config.baselines.HiGFlowGraph = higflow_config() 
     config.baselines.StemGNN = StemGNN_config()
     config.baselines.FourierGNN = FourierGNN_config()
     config.baselines.HGCN = HGCN_config()
@@ -46,4 +52,11 @@ def graph_config():
     config.baselines.DLinear = ml.ConfigDict()
     config.baselines.NLinear = ml.ConfigDict()
     config.baselines.GWNET = ml.ConfigDict()
+    config.baselines.DGraFormer = DGraFormer_config()
+    config.baselines.MICN = {} 
+
+    config.baselines.AMD = AMD_config()
+    config.baselines.FilterTS = FilterTS_config()
+    config.baselines.TimeMixerpp = timemixerpp_config()
+
     return config
