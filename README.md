@@ -10,6 +10,10 @@
 
 This is a repository for the paper *Improving Hierarchical Graph Neural Network Forecasters through Expressive Memory Enhancement*, which proposes the HiGFlow model, a Hierarchical Graph Neural Network (GNN) that uses a memory buffer to retain learnt global trends.  
 
+## Environment Set up 
+
+To run HiGFlow, we use `Python 3.10.12`. Environment packages can be installed by running `pip install -r requirements.txt`. Note that in our implementations, we use the CUDA-enabled versions of `torch-scatter` and `torch-sparse`. 
+
 ## Run HiGFlow over the PEMS datasets
 
 To run HiGFlow over PEMS, where we use the known ground truth graph from torch-spatiotemporal, use the following call signature:
