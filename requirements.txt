@@ -1,0 +1,15 @@
+matplotlib==3.9.4
+ml-collections==0.1.1
+networkx==3.2.1
+numpy==1.23.0
+pandas==2.3.3
+pytorch-lightning==2.5.5
+scikit-learn==1.6.1
+scipy==1.13.1
+torch==2.5.1
+torch-geometric==2.6.1
+torch_scatter==2.1.2
+torch_sparse==0.6.18
+torch_spatiotemporal==0.9.5
+torchmetrics==1.8.2
+yarl==1.22.0
