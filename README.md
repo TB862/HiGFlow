@@ -1,5 +1,13 @@
 # Overview of Code Repository
 
+<p align="center">
+  <img src="HiGFlow.jpg" width="700">
+</p>
+
+<p align="center">
+  <img src="time_buffer_horizon_plot.jpg" width="800">
+</p>
+
 This is a repository for the paper *Improving Hierarchical Graph Neural Network Forecasters through Expressive Memory Enhancement*, which proposes the HiGFlow model, a Hierarchical Graph Neural Network (GNN) that uses a memory buffer to retain learnt global trends.  
 
 ## Run HiGFlow over the PEMS datasets
