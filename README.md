@@ -8,7 +8,7 @@
   <img src="time_buffer_horizon_plot.jpg" width="800">
 </p>
 
-This is a repository for the paper *Improving Hierarchical Graph Neural Network Forecasters through Expressive Memory Enhancement*, which proposes the HiGFlow model, a Hierarchical Graph Neural Network (GNN) that uses a memory buffer to retain learnt global trends.  
+This is a repository for the paper *Addressing Downward Memory Loss in Hierarchical GNN Forecasters through Memory-Buffered Decoding*, which proposes the HiGFlow model, a Hierarchical Graph Neural Network (GNN) that uses a memory buffer to retain learnt global trends.  
 
 ## Environment Set up 
 
